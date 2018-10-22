@@ -1,0 +1,35 @@
+class SamlController < ApplicationController
+  # SAML will not work with authenticity tokens, but it has it's own protections against CSRF.
+  skip_before_action :verify_authenticity_token, only: :callback
+
+  def auth
+    request = OneLogin::RubySaml::Authrequest.new
+    redirect_to(request.create(saml_settings))
+  end
+
+  def callback
+    response          = OneLogin::RubySaml::Response.new(params[:SAMLResponse])
+    response.settings = saml_settings
+
+    # We validate the SAML Response and check if the user already exists in the system
+    if response.is_valid?
+      session[:userid] = response.nameid
+      session[:authenticated] = true
+      redirect_to(root_url)
+    else
+      Rails.logger.error('Invalid SAML response')
+      Rails.logger.error(response.errors)
+      render file: 'public/401.html', status: 401, layout: false
+    end
+  end
+
+  private
+
+    def saml_settings
+      idp_metadata_parser = OneLogin::RubySaml::IdpMetadataParser.new
+      settings = idp_metadata_parser.parse_remote(ENV.fetch('SAML_IDP_METADATA_URL'))
+      settings.assertion_consumer_service_url = saml_callback_url
+      settings.name_identifier_format = 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress'
+      settings
+    end
+end

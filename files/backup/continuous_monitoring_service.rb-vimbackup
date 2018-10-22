@@ -1,0 +1,66 @@
+require_relative './continuous_monitoring_service/report_creator'
+
+module ContinuousMonitoringService
+  CONTINUOUS_MONITORING_URL = ENV.fetch('CONTINUOUS_MONITORING_URL')
+
+  def self.client
+    Idl::ContinuousMonitoring::ContinuousMonitoring::Stub.new(CONTINUOUS_MONITORING_URL, :this_channel_is_insecure)
+  end
+
+  def self.subscribe(candidate)
+    msg = Idl::ContinuousMonitoring::SubscriptionRequest.new(
+      account_id: candidate.account.resource_id,
+      candidate_id: candidate.resource_id,
+      request_params: {
+        names: [
+          {
+            first_name: candidate.first_name.to_s,
+            middle_name: candidate.middle_name.to_s,
+            last_name: candidate.last_name.to_s
+          }
+        ],
+        encrypted_ssn: candidate.encrypted_ssn.to_s,
+        dl_numbers: [candidate.dl_number].compact,
+        dob: candidate.dob.to_s
+      }
+    )
+
+    with_retry(retry_configuration) do
+        client.subscribe(msg)
+    end
+  end
+
+  def self.unsubscribe(candidate)
+    msg = Idl::ContinuousMonitoring::SubscriptionRequest.new(
+      candidate_id: candidate.resource_id
+    )
+
+    with_retry(retry_configuration) do
+        client.unsubscribe(msg)
+    end
+  end
+
+  def self.get_subscription(candidate)
+    msg = Idl::ContinuousMonitoring::SubscriptionRequest.new(
+      candidate_id: candidate.resource_id
+    )
+
+    with_retry(retry_configuration) do
+        client.get_subscription(msg)
+    end
+  end
+
+  def self.create_report(candidate, params)
+    ReportCreator.new(candidate: candidate, report_params: params).create!
+  end
+
+  private
+
+  def retry_configuration
+      {
+          max_retries: 3,
+          max_sleep_seconds: 20,
+          rescue: [Timeout::Error]
+      }
+  end
+end

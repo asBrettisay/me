@@ -1,0 +1,67 @@
+class DataSourceSubscription < ApplicationRecord
+  self.primary_key = :resource_id
+
+  acts_as_paranoid
+
+  has_many :subscription_results
+  has_many :records, through: :subscription_results
+  has_many :orders
+
+  belongs_to :subscription
+  belongs_to :data_source
+  belongs_to :pilot, optional: true
+
+  delegate :push?, :pull?, :integration, to: :data_source
+  delegate :frequency, :order_synchronization?, to: :integration
+  delegate :request_params, to: :subscription, allow_nil: true
+
+  scope :to_order, -> { where('send_next_order_at < ?', Time.now) }
+
+  before_create :initialize_send_next_order_at
+
+  validates :subscription_id, uniqueness: { scope: [:data_source_id, :deleted_at] }
+
+  def self.synchronizable
+    all.select { |data_source_subscription| data_source_subscription.pull? && data_source_subscription.order_synchronization? }
+  end
+
+  def unsubscribe!
+    data_source.for(self).unsubscribe!
+  end
+
+  def subscribe!
+    data_source.for(self).subscribe!
+  end
+
+  def update_subscription!
+    data_source.for(self).update_subscription!
+  end
+
+  def pilot?
+    pilot.present? || subscription.pilot.present?
+  end
+
+  def send_ticket?
+    pilot? && (pilot&.send_ticket? || subscription.pilot&.send_ticket?)
+  end
+
+  def submit_order!
+    return unless needs_order?
+
+    data_source.for(self).submit_order!
+    self.send_next_order_at = Time.now + integration.frequency.to_i
+    save!
+  end
+
+  private
+
+    # Randomizes the send_next_order_at timestamp to a date within the period specified by the frequency
+    # This helps with evenly distributing recurring subscription runs
+    def initialize_send_next_order_at
+      self.send_next_order_at = Time.now + (rand() * frequency).to_i if pull?
+    end
+
+    def needs_order?
+      pull? && (send_next_order_at.blank? || send_next_order_at < Time.now)
+    end
+end
